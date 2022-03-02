@@ -13,7 +13,7 @@ use std::{
     env,
     error::Error,
     io::{self, ErrorKind},
-    net::{Ipv4Addr, IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 
@@ -34,10 +34,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             log::warn!("Config is unreadable. Using default config. {}", err);
 
             let config = DirectShareConfig::default();
-            
+
             if err.kind() == ErrorKind::NotFound {
                 log::info!("Creating default config...");
-                if let Err(write_err) = fs::write(constants::CONFIG_FILE, toml::to_string_pretty(&config).unwrap()).await {
+                if let Err(write_err) = fs::write(
+                    constants::CONFIG_FILE,
+                    toml::to_string_pretty(&config).unwrap(),
+                )
+                .await
+                {
                     log::warn!("Cannot write default config. {}", write_err);
                 } else {
                     log::info!("Default config written");
@@ -61,7 +66,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut app = DirectShare::new(config.key_length);
 
-    let ip = public_ip::addr().await.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let ip = public_ip::addr()
+        .await
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
     for arg in args {
         let key = app.register(arg.clone());
 
@@ -73,10 +80,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             key
         );
     }
-    
+
     log::info!("Server starting on http://{}:{}/", ip, config.port);
 
-    if let Err(err) = Arc::new(app).run(SocketAddr::new(ip, config.port.get())).await {
+    if let Err(err) = Arc::new(app)
+        .run(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            config.port.get(),
+        ))
+        .await
+    {
         log::error!("Error while running server. {}", err);
     }
 
