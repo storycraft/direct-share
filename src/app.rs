@@ -62,6 +62,8 @@ impl DirectShare {
 
         match File::open(file_path).await {
             Ok(file) => {
+                let size_res = file.metadata().await.and_then(|metadata| Ok(metadata.len()));
+
                 let stream = FramedRead::new(file, BytesCodec::new());
                 let mut res = Response::new(Body::wrap_stream(stream));
 
@@ -69,6 +71,10 @@ impl DirectShare {
                     .file_name()
                     .map(|os_str| os_str.to_string_lossy().to_string())
                     .unwrap_or(constants::FALLBACK_FILENAME.into());
+
+                if let Ok(size) = size_res {
+                    res.headers_mut().insert(header::CONTENT_LENGTH, size.to_string().parse().unwrap());
+                }
 
                 res.headers_mut().insert(
                     header::CONTENT_DISPOSITION,
