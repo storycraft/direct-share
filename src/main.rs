@@ -112,7 +112,11 @@ fn init_logger() {
 }
 
 async fn load_config() -> Result<DirectShareConfig, ConfigLoadError> {
-    match fs::read(constants::CONFIG_FILE).await {
+    let mut path = env::current_exe().unwrap_or_default();
+    path.pop();
+    path.push(constants::CONFIG_FILE);
+
+    match fs::read(path).await {
         Ok(data) => match toml::from_slice::<DirectShareConfig>(&data) {
             Ok(config) => Ok(config),
             Err(err) => Err(ConfigLoadError::Invalid(err)),
