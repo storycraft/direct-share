@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let key = map.register(arg.clone().into());
 
         log::info!(
-            "path added path: {} -> http://{ip}:{}/{key}",
+            "registered {} url: http://{ip}:{}/{key}",
             arg.to_string_lossy(),
             config.port
         );
