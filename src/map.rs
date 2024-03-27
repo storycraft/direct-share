@@ -4,14 +4,14 @@
  * Copyright (c) storycraft. Licensed under the MIT Licence.
  */
 
-use std::{collections::HashMap, num::NonZeroU8};
+use std::{collections::HashMap, num::NonZeroU8, path::PathBuf};
 
 use rand::{thread_rng, Rng};
 
 #[derive(Debug, Clone)]
 pub struct PathMap {
     key_length: NonZeroU8,
-    map: HashMap<String, String>,
+    map: HashMap<String, PathBuf>,
 }
 
 impl PathMap {
@@ -23,12 +23,12 @@ impl PathMap {
     }
 
     /// Get file path from shorten uri
-    pub fn get(&self, uri: &str) -> Option<&String> {
-        self.map.get(uri)
+    pub fn get(&self, path: &str) -> Option<&PathBuf> {
+        self.map.get(path)
     }
 
-    /// Register path and return shorten key
-    pub fn register(&mut self, path: String) -> String {
+    /// Register new path and return path
+    pub fn register(&mut self, path: PathBuf) -> String {
         let key = gen_key(self.key_length.get() as usize);
 
         self.map.insert(key.clone(), path);
