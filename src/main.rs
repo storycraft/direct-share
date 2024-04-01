@@ -18,6 +18,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     path::Path,
     sync::Arc,
+    time::Duration,
 };
 
 use config::DirectShareConfig;
@@ -32,13 +33,16 @@ use hyper::{
     Method, Request, Response, StatusCode,
 };
 use hyper_util::rt::TokioIo;
+use igd::{aio::search_gateway, PortMappingProtocol, SearchOptions};
+use local_ip_address::local_ip;
 use log::LevelFilter;
 use thiserror::Error;
 use tokio::{
     fs::{self, File},
     io::duplex,
     net::TcpListener,
-    spawn,
+    select, signal, spawn,
+    time::sleep,
 };
 use tokio_util::io::ReaderStream;
 
@@ -70,7 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let config = DirectShareConfig::default();
 
             if err.kind() == ErrorKind::NotFound {
-                log::info!("Creating default config...");
+                log::info!("creating default config...");
                 if let Err(write_err) = fs::write(
                     constants::CONFIG_FILE,
                     toml::to_string_pretty(&config).unwrap(),
@@ -100,9 +104,62 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut map = PathMap::new(config.key_length);
 
-    let ip = public_ip::addr()
-        .await
-        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let ip = local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+    spawn({
+        let port = config.port.get();
+
+        async move {
+            let gateway = match search_gateway(SearchOptions::default()).await {
+                Ok(gateway) => gateway,
+                Err(err) => {
+                    log::warn!("uPnP discovery failed err: {err}");
+                    return;
+                }
+            };
+
+            if let Ok(external_ip) = gateway.get_external_ip().await {
+                if ip != external_ip {
+                    log::warn!("NAT detected external_ip: {external_ip}");
+                }
+            }
+
+            let task = async {
+                const TIMEOUT: Duration = Duration::from_secs(120);
+                loop {
+                    if let Err(err) = gateway
+                        .add_port(
+                            PortMappingProtocol::TCP,
+                            port,
+                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+                            TIMEOUT.as_secs() as u32,
+                            "DirectShare port mapping",
+                        )
+                        .await
+                    {
+                        log::warn!("uPnP port mapping failed err: {err}");
+                    }
+
+                    sleep(TIMEOUT).await;
+                }
+            };
+
+            let cleanup = async {
+                if signal::ctrl_c().await.is_err() {
+                    log::warn!("SIGINT signal hook failed.");
+                    return;
+                };
+
+                let _ = gateway.remove_port(PortMappingProtocol::TCP, port).await;
+            };
+
+            select! {
+                _ = task => {}
+                _ = cleanup => {}
+            };
+        }
+    });
+
     for arg in args {
         let key = map.register(arg.clone().into());
 
@@ -127,28 +184,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let map = Arc::new(map);
-    loop {
-        let (stream, addr) = listener.accept().await?;
+    let server = async move {
+        let map = Arc::new(map);
+        loop {
+            let (stream, addr) = listener.accept().await?;
 
-        log::trace!("{addr} connected");
+            log::trace!("{addr} connected");
 
-        spawn({
-            let map = map.clone();
+            spawn({
+                let map = map.clone();
 
-            async move {
-                if let Err(err) = http1::Builder::new()
-                    .serve_connection(
-                        TokioIo::new(stream),
-                        service_fn(|req| response(addr, &map, req).map(Ok::<_, Infallible>)),
-                    )
-                    .await
-                {
-                    log::error!("could not deliver file from addr: {addr} err: {err}");
+                async move {
+                    if let Err(err) = http1::Builder::new()
+                        .serve_connection(
+                            TokioIo::new(stream),
+                            service_fn(|req| response(addr, &map, req).map(Ok::<_, Infallible>)),
+                        )
+                        .await
+                    {
+                        log::error!("could not deliver file from addr: {addr} err: {err}");
+                    }
                 }
-            }
-        });
-    }
+            });
+        }
+
+        #[allow(unreachable_code)]
+        Ok::<_, anyhow::Error>(unreachable!())
+    };
+
+    select! {
+        Ok(_) = signal::ctrl_c() => {
+            log::info!("stopping server...");
+        }
+        _ = server => {}
+    };
+
+    Ok(())
 }
 
 async fn response(
