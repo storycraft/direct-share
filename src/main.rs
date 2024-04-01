@@ -126,6 +126,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             let task = async {
                 const TIMEOUT: Duration = Duration::from_secs(120);
+
                 loop {
                     if let Err(err) = gateway
                         .add_port(
