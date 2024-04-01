@@ -104,7 +104,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut map = PathMap::new(config.key_length);
 
-    let ip = local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let ip = local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
     spawn({
         let port = config.port.get();
@@ -121,24 +121,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if let Ok(external_ip) = gateway.get_external_ip().await {
                 if ip != external_ip {
                     log::warn!("NAT detected external_ip: {external_ip}");
+                    log::warn!("use {external_ip} instead when sharing over WAN");
                 }
             }
+
+            let IpAddr::V4(ip) = ip else {
+                return;
+            };
 
             let task = async {
                 const TIMEOUT: Duration = Duration::from_secs(120);
 
-                loop {
-                    if let Err(err) = gateway
+                'task_loop: loop {
+                    let mut attempts = 0;
+                    while let Err(err) = gateway
                         .add_port(
                             PortMappingProtocol::TCP,
                             port,
-                            SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+                            SocketAddrV4::new(ip, port),
                             TIMEOUT.as_secs() as u32,
                             "DirectShare port mapping",
                         )
                         .await
                     {
-                        log::warn!("uPnP port mapping failed err: {err}");
+                        if attempts >= 5 {
+                            log::error!("uPnP port mapping failed, cannot be shared over WAN");
+                            break 'task_loop;
+                        }
+
+                        let next = Duration::from_secs(5 + attempts * 5);
+                        log::warn!(
+                            "uPnP port mapping failed, retrying after {} secs err: {err}",
+                            next.as_secs()
+                        );
+
+                        sleep(next).await;
+                        attempts += 1;
                     }
 
                     sleep(TIMEOUT).await;
