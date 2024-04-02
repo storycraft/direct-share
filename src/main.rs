@@ -132,7 +132,7 @@ async fn server(listener: TcpListener, map: Arc<PathMap>) -> Result<Never, anyho
                     )
                     .await
                 {
-                    log::error!("could not deliver file from addr: {addr} err: {err}");
+                    log::warn!("could not deliver file from addr: {addr} err: {err}");
                 }
             }
         });
@@ -177,7 +177,7 @@ async fn upnp_service(ip: IpAddr, port: NonZeroU16) {
                 .await
             {
                 if attempts >= 5 {
-                    log::error!("uPnP port mapping failed, cannot be shared over WAN");
+                    log::error!("uPnP port mapping failed, please do port forwarding manually or cannot be shared over WAN");
                     break 'task_loop;
                 }
 
