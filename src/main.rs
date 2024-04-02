@@ -303,7 +303,7 @@ async fn serve_directory(
         let path = path.to_path_buf();
 
         async move {
-            let mut ar = tokio_tar::Builder::new(tx);
+            let mut ar = tokio_tar::Builder::new_non_terminated(tx);
             ar.append_dir_all(".", path).await?;
             ar.finish().await?;
 
