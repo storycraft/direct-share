@@ -16,6 +16,7 @@ use std::{
     fs::Metadata,
     io::{self, ErrorKind},
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    num::NonZeroU16,
     path::Path,
     sync::Arc,
     time::Duration,
@@ -36,6 +37,7 @@ use hyper_util::rt::TokioIo;
 use igd::{aio::search_gateway, PortMappingProtocol, SearchOptions};
 use local_ip_address::local_ip;
 use log::LevelFilter;
+use never_say_never::Never;
 use thiserror::Error;
 use tokio::{
     fs::{self, File},
@@ -65,36 +67,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     log::info!("initializing DirectShare...");
 
-    let config = match load_config().await {
-        Ok(config) => config,
-
-        Err(ConfigLoadError::Unreadable(err)) => {
-            log::warn!("config is unreadable. using default config. {err}");
-
-            let config = DirectShareConfig::default();
-
-            if err.kind() == ErrorKind::NotFound {
-                log::info!("creating default config...");
-                if let Err(write_err) = fs::write(
-                    constants::CONFIG_FILE,
-                    toml::to_string_pretty(&config).unwrap(),
-                )
-                .await
-                {
-                    log::warn!("cannot write default config err: {write_err}");
-                } else {
-                    log::info!("default config written");
-                }
-            }
-
-            config
-        }
-
-        Err(ConfigLoadError::Invalid(err)) => {
-            log::error!("config is corrupted or not in right format, please fix or delete config file and restart err: {err}");
-            return Ok(());
-        }
-    };
+    let config = load_config().await;
 
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     if args.is_empty() {
@@ -106,78 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let ip = local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
-    spawn({
-        let port = config.port.get();
-
-        async move {
-            let gateway = match search_gateway(SearchOptions::default()).await {
-                Ok(gateway) => gateway,
-                Err(err) => {
-                    log::warn!("uPnP discovery failed err: {err}");
-                    return;
-                }
-            };
-
-            if let Ok(external_ip) = gateway.get_external_ip().await {
-                if ip != external_ip {
-                    log::warn!("NAT detected external_ip: {external_ip}");
-                    log::warn!("use {external_ip} instead when sharing over WAN");
-                }
-            }
-
-            let IpAddr::V4(ip) = ip else {
-                return;
-            };
-
-            let task = async {
-                const TIMEOUT: Duration = Duration::from_secs(120);
-
-                'task_loop: loop {
-                    let mut attempts = 0;
-                    while let Err(err) = gateway
-                        .add_port(
-                            PortMappingProtocol::TCP,
-                            port,
-                            SocketAddrV4::new(ip, port),
-                            TIMEOUT.as_secs() as u32,
-                            "DirectShare port mapping",
-                        )
-                        .await
-                    {
-                        if attempts >= 5 {
-                            log::error!("uPnP port mapping failed, cannot be shared over WAN");
-                            break 'task_loop;
-                        }
-
-                        let next = Duration::from_secs(5 + attempts * 5);
-                        log::warn!(
-                            "uPnP port mapping failed, retrying after {} secs err: {err}",
-                            next.as_secs()
-                        );
-
-                        sleep(next).await;
-                        attempts += 1;
-                    }
-
-                    sleep(TIMEOUT).await;
-                }
-            };
-
-            let cleanup = async {
-                if signal::ctrl_c().await.is_err() {
-                    log::warn!("SIGINT signal hook failed.");
-                    return;
-                };
-
-                let _ = gateway.remove_port(PortMappingProtocol::TCP, port).await;
-            };
-
-            select! {
-                _ = task => {}
-                _ = cleanup => {}
-            };
-        }
-    });
+    spawn(upnp_service(ip, config.port));
 
     for arg in args {
         let key = map.register(arg.clone().into());
@@ -203,42 +105,109 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let server = async move {
-        let map = Arc::new(map);
-        loop {
-            let (stream, addr) = listener.accept().await?;
-
-            log::trace!("{addr} connected");
-
-            spawn({
-                let map = map.clone();
-
-                async move {
-                    if let Err(err) = http1::Builder::new()
-                        .serve_connection(
-                            TokioIo::new(stream),
-                            service_fn(|req| response(addr, &map, req).map(Ok::<_, Infallible>)),
-                        )
-                        .await
-                    {
-                        log::error!("could not deliver file from addr: {addr} err: {err}");
-                    }
-                }
-            });
-        }
-
-        #[allow(unreachable_code)]
-        Ok::<_, anyhow::Error>(unreachable!())
-    };
-
     select! {
         Ok(_) = signal::ctrl_c() => {
             log::info!("stopping server...");
         }
-        _ = server => {}
+        _ = server(listener, Arc::new(map)) => {}
     };
 
     Ok(())
+}
+
+async fn server(listener: TcpListener, map: Arc<PathMap>) -> Result<Never, anyhow::Error> {
+    loop {
+        let (stream, addr) = listener.accept().await?;
+
+        log::trace!("{addr} connected");
+
+        spawn({
+            let map = map.clone();
+
+            async move {
+                if let Err(err) = http1::Builder::new()
+                    .serve_connection(
+                        TokioIo::new(stream),
+                        service_fn(|req| response(addr, &map, req).map(Ok::<_, Infallible>)),
+                    )
+                    .await
+                {
+                    log::error!("could not deliver file from addr: {addr} err: {err}");
+                }
+            }
+        });
+    }
+}
+
+async fn upnp_service(ip: IpAddr, port: NonZeroU16) {
+    let gateway = match search_gateway(SearchOptions::default()).await {
+        Ok(gateway) => gateway,
+        Err(err) => {
+            log::warn!("uPnP discovery failed err: {err}");
+            return;
+        }
+    };
+
+    if let Ok(external_ip) = gateway.get_external_ip().await {
+        if ip != external_ip {
+            log::warn!("NAT detected external_ip: {external_ip}");
+            log::warn!("use {external_ip} instead when sharing over WAN");
+        }
+    }
+
+    let IpAddr::V4(ip) = ip else {
+        return;
+    };
+
+    let port = port.get();
+
+    let task = async {
+        const TIMEOUT: Duration = Duration::from_secs(120);
+
+        'task_loop: loop {
+            let mut attempts = 0;
+            while let Err(err) = gateway
+                .add_port(
+                    PortMappingProtocol::TCP,
+                    port,
+                    SocketAddrV4::new(ip, port),
+                    TIMEOUT.as_secs() as u32,
+                    "DirectShare port mapping",
+                )
+                .await
+            {
+                if attempts >= 5 {
+                    log::error!("uPnP port mapping failed, cannot be shared over WAN");
+                    break 'task_loop;
+                }
+
+                let next = Duration::from_secs(5 + attempts * 5);
+                log::warn!(
+                    "uPnP port mapping failed, retrying after {} secs err: {err}",
+                    next.as_secs()
+                );
+
+                sleep(next).await;
+                attempts += 1;
+            }
+
+            sleep(TIMEOUT).await;
+        }
+    };
+
+    let cleanup = async {
+        if signal::ctrl_c().await.is_err() {
+            log::warn!("SIGINT signal hook failed.");
+            return;
+        };
+
+        let _ = gateway.remove_port(PortMappingProtocol::TCP, port).await;
+    };
+
+    select! {
+        _ = task => {}
+        _ = cleanup => {}
+    }
 }
 
 async fn response(
@@ -362,18 +331,54 @@ fn not_found_page() -> Response<BoxBody<Bytes, io::Error>> {
         .unwrap()
 }
 
-async fn load_config() -> Result<DirectShareConfig, ConfigLoadError> {
-    let data = fs::read_to_string(constants::CONFIG_FILE)
-        .await
-        .map_err(ConfigLoadError::Unreadable)?;
+async fn load_config() -> DirectShareConfig {
+    #[derive(Debug, Error)]
+    pub enum Error {
+        #[error(transparent)]
+        Invalid(#[from] toml::de::Error),
+        #[error(transparent)]
+        Unreadable(#[from] io::Error),
+    }
 
-    toml::from_str::<DirectShareConfig>(&data).map_err(ConfigLoadError::Invalid)
-}
+    async fn load() -> Result<DirectShareConfig, Error> {
+        let data = fs::read_to_string(constants::CONFIG_FILE)
+            .await
+            .map_err(Error::Unreadable)?;
 
-#[derive(Debug, Error)]
-pub enum ConfigLoadError {
-    #[error(transparent)]
-    Invalid(#[from] toml::de::Error),
-    #[error(transparent)]
-    Unreadable(#[from] io::Error),
+        toml::from_str::<DirectShareConfig>(&data).map_err(Error::Invalid)
+    }
+
+    match load().await {
+        Ok(config) => config,
+
+        Err(Error::Unreadable(err)) => {
+            log::warn!("config is unreadable. using default config. {err}");
+
+            let config = DirectShareConfig::default();
+
+            if err.kind() == ErrorKind::NotFound {
+                log::info!("creating default config...");
+                if let Err(write_err) = fs::write(
+                    constants::CONFIG_FILE,
+                    toml::to_string_pretty(&config).unwrap(),
+                )
+                .await
+                {
+                    log::warn!("cannot write default config err: {write_err}");
+                } else {
+                    log::info!("default config written");
+                }
+            }
+
+            config
+        }
+
+        Err(Error::Invalid(err)) => {
+            log::error!(
+                "config is corrupted or not in right format, using default config err: {err}"
+            );
+
+            DirectShareConfig::default()
+        }
+    }
 }
