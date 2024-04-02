@@ -1,27 +1,22 @@
+[한국어 README](./readme_ko.md)
+
 # DirectShare
-Self host files & directory in one click.
+Self host files & directory in one click
 
-여러 파일들을 간편하게 셀프 호스팅 할 수 있게 해줍니다.
+## Features
+* Automatic uPnP port forwarding
+* Configurable port, shorten url length
+* Directory tarball streaming
 
-## 사용법
+## Usage
 Drag files into executable and connect to generated shorten url.
-
-공유 할 파일들을 프로그램에 드래그하여 실행한뒤 생성된 단축 url로 접속하면 다운로드 할 수 있습니다.
+Directories are shared as tarball archive.
 
 ```
 registered foo.txt url: http://127.0.0.1:1024/xIqfLguw
 ```
-`http://127.0.0.1:1024/xIqfLguw` is download url for foo.txt
-
-여기서 `http://127.0.0.1:1024/xIqfLguw` 가 foo.txt 파일을 받을수 있는 주소 입니다.
-
-URL length and host port are configurable in `direct_share.toml`
-
-`direct_share.toml` 파일에서 단축 url의 주소 길이와 포트 번호를 설정 할 수 있습니다.
-
-Directories are streamed to tarball.
-
-폴더의 경우 tar 파일로 스트리밍됩니다.
+`http://127.0.0.1:1024/xIqfLguw` is download url for foo.txt.
+URL length and host port are configurable in `direct_share.toml`.
 
 ## License
 `DirectShare` is following MIT License
