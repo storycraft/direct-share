@@ -6,7 +6,7 @@ Self host files & directory in one click
 ## Features
 * Automatic uPnP port forwarding
 * Configurable port, shorten url length
-* Directory tarball streaming
+* Directory sharing (via tarball archive)
 
 ## Usage
 Drag files into executable and connect to generated shorten url.
