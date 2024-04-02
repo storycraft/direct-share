@@ -352,7 +352,7 @@ async fn load_config() -> DirectShareConfig {
         Ok(config) => config,
 
         Err(Error::Unreadable(err)) => {
-            log::warn!("config is unreadable. using default config. {err}");
+            log::warn!("config is unreadable. using default config. err: {err}");
 
             let config = DirectShareConfig::default();
 
