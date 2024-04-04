@@ -16,9 +16,6 @@ pub struct DirectShareConfig {
 
     /// Key length for shorten url
     pub key_length: NonZeroU8,
-
-    /// File that will be used for 404 page
-    pub default_file: Option<String>,
 }
 
 impl Default for DirectShareConfig {
@@ -26,7 +23,6 @@ impl Default for DirectShareConfig {
         Self {
             port: NonZeroU16::new(1024).unwrap(),
             key_length: NonZeroU8::new(8).unwrap(),
-            default_file: None,
         }
     }
 }
