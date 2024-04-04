@@ -63,6 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 LevelFilter::Trace
             }
         })
+        .parse_default_env()
         .init();
 
     log::info!("initializing DirectShare...");
