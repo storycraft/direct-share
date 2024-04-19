@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let ip = local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
-    spawn(upnp_service(ip, config.port));
+    let service = spawn(upnp_service(ip, config.port));
 
     for arg in args {
         let key = map.register(arg.clone().into());
@@ -109,6 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     select! {
         Ok(_) = signal::ctrl_c() => {
             log::info!("stopping server...");
+            let _ = service.await;
         }
         _ = server(listener, Arc::new(map)) => {}
     };
